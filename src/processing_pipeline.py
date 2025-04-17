@@ -1,131 +1,137 @@
-import sys
+import os
 
 import numpy as np
 import open3d as o3d
-from sklearn.decomposition import PCA
 from matplotlib import pyplot as plt
-from sklearn.linear_model import LinearRegression
+from scipy.interpolate import make_smoothing_spline, UnivariateSpline
+from scipy.ndimage import gaussian_filter1d
+from sklearn.kernel_ridge import KernelRidge
 
-from bag_file_handling import read_bag_file
-from pcd_processing import depth_to_point_cloud, create_open3d_point_cloud, save_clusters_as_ply
-from pcd_slicing import slice_point_cloud_rotated, extract_thin_slice
-from processing_helper import rotation_matrix_from_axis_angle, refine_flow_direction
+from pcd_processing import process_frame, merge_point_clouds
+from pcd_slicing import slice_and_project
+from processing_helper import fit_plane_to_point_cloud, visualize_plane
+from src.extract_xlsx import extract_xlsx
+from src.pcd_slicing import slice_point_cloud, rotate_points
 from src.processing_helper import pick_direction_interactively
 
 
-def process_point_cloud(bag_file, output_folder, eps=0.01, min_points=50, max_distance=0.9, frame_number=5, frame_count=20, n_slices=10):
-    ###################################################################### Single Frame Code Below ######################################################################
-    # Step 1: Read the bag file and extract depth and color images
-    depth_image, color_image, depth_scale, intrinsics = read_bag_file(bag_file, start_frame=frame_number, frame_count=frame_count)
-
-    # Step 2: Convert depth image to point cloud
-    points, colors = depth_to_point_cloud(depth_image, color_image, depth_scale, intrinsics, max_distance=max_distance)
-
-    # Step 3: Create an Open3D point cloud
-    pcd = create_open3d_point_cloud(points, colors)
-    print(f"The point cloud contains {len(pcd.points)} points.")
-    ###################################################################### Single Frame Code Above ######################################################################
-
-
-    # Step 4: Cluster the point cloud and save the largest cluster as a PLY file
-    clustered_pcd = save_clusters_as_ply(pcd, eps=eps, min_points=min_points, output_folder=output_folder)
-    cl, ind = clustered_pcd.remove_statistical_outlier(nb_neighbors=200, std_ratio=1.5)
-    clustered_pcd = clustered_pcd.select_by_index(ind)
-
-    direction, p1, p2 = pick_direction_interactively(clustered_pcd)
-
-    sys.exit("Halt Stopp!")
-
-    # Step 5: Write the clustered point cloud to a file
-    o3d.io.write_point_cloud(f"{output_folder}/output_point_cloud.ply", clustered_pcd)
-
-    # Step 6: Refine the flow direction using PCA
-    flow_direction = refine_flow_direction(clustered_pcd)
-    flow_direction_normalized = flow_direction / np.linalg.norm(flow_direction)
-
-    # Step 7: Define a point on the plane (mean of the point cloud)
-    point_on_plane = np.mean(np.asarray(clustered_pcd.points), axis=0)
-
-    # Step 8: Slice the point cloud with the rotated plane
-    ############################################### Single Slice #######################################################
-    slice = extract_thin_slice(clustered_pcd, flow_direction_normalized, point_on_plane, thickness=0.3)
-    
-    if not slice.is_empty():
-        o3d.io.write_point_cloud(f"{output_folder}/slice.ply", slice)
-        print("Saved slice to slice.ply")
-    ############################################### Single Slice #######################################################
-
-    ############################################### Multiple Slices ####################################################
-    """all_slices = []
-    slice_offset = 0.1
-    for i in range(n_slices):
-        perpendicular_direction = np.cross(flow_direction_normalized, np.array([1, 0, 0]))
-
-        if np.linalg.norm(perpendicular_direction) == 0:
-            perpendicular_direction = np.cross(flow_direction_normalized, np.array([0, 1, 0]))
-
-        perpendicular_direction_normalized = perpendicular_direction / np.linalg.norm(perpendicular_direction)
-
-        shifted_point_on_plane = point_on_plane + perpendicular_direction_normalized * slice_offset * i
-
-        # Extract the slice with the fixed thickness
-        slice = extract_thin_slice(clustered_pcd, flow_direction_normalized, shifted_point_on_plane)
-
-        if not slice.is_empty():
-            all_slices.append(slice)
-            o3d.io.write_point_cloud(f"{output_folder}/slice_{i}.ply", slice)
-            print(f"Saved slice_{i} to slice_{i}.ply")"""
-    ############################################### Multiple Slices ####################################################
-
-
-    # Step 10: Fit a plane to the slice points using PCA
-    points = np.asarray(slice.points)
-    pca = PCA(n_components=3)
-    pca.fit(points)
-    normal_vector = pca.components_[-1]  # The normal vector is the last component
-
-    # Step 11: Compute the rotation matrix to align the normal vector with the Z-axis
-    z_axis = np.array([0, 0, 1])
-    axis = np.cross(normal_vector, z_axis)
-    axis_length = np.linalg.norm(axis)
-
-    if axis_length > 0:
-        axis = axis / axis_length
-        angle = np.arccos(np.dot(normal_vector, z_axis))
-        rotation_matrix = rotation_matrix_from_axis_angle(axis, angle)
+def process_point_cloud(
+        bag_file_floor, bag_file_water, output_folder, eps=0.01, min_points=50, max_distance=1,
+        frame_numbers=[5, 6000], frame_count=20, load=False,
+        step_size=0.001, num_slices=20, plot_ultrasound=False):
+    if load:
+        clustered_first = o3d.io.read_point_cloud(f"{output_folder}/output_point_cloud_first.ply")
+        clustered_second = o3d.io.read_point_cloud(f"{output_folder}/output_point_cloud_second.ply")
     else:
-        rotation_matrix = np.eye(3)  # The normal vector is already aligned
+        clustered_first = process_frame(bag_file_floor, frame_numbers[0], frame_count, max_distance, eps, min_points,
+                                          output_folder)
+        clustered_second = process_frame(bag_file_water, frame_numbers[1], frame_count, max_distance, eps, min_points,
+                                        output_folder)
 
-    rotated_points = np.dot(points - np.mean(points, axis=0), rotation_matrix.T)
+    o3d.io.write_point_cloud(f"{output_folder}/output_point_cloud_first.ply", clustered_first)
+    o3d.io.write_point_cloud(f"{output_folder}/output_point_cloud_second.ply", clustered_second)
 
-    # Step 12: Perform 2D projection and linear regression
-    projected_points = rotated_points[:, :2]
-    projected_points[:, [0, 1]] = projected_points[:, [1, 0]]  # Swap x and y coordinates
-    third_points = projected_points[:len(points) // 3]
+    direction, p1, p2 = pick_direction_interactively(clustered_first)
+    normal = fit_plane_to_point_cloud(clustered_first)
+    visualize_plane(clustered_first, p1, p2, normal)
 
-    regressor = LinearRegression()
-    regressor.fit(third_points[:, 0].reshape(-1, 1), third_points[:, 1])
+    # Compute shift direction using cross product
+    slice_direction = np.cross(normal, (p2 - p1))
+    slice_direction /= np.linalg.norm(slice_direction)  # Normalize
 
-    slope = regressor.coef_[0]
-    angle = np.arctan(slope)  # Angle in radians
+    all_projections_first = []
+    all_projections_second = []
 
-    rotation_matrix_2d = np.array([
-        [np.cos(-angle), -np.sin(-angle)],
-        [np.sin(-angle), np.cos(-angle)]
-    ])
+    # Generate shifts symmetrically around the center (negative and positive steps)
+    shift_values = np.linspace(-step_size * (num_slices // 2), step_size * (num_slices // 2), num_slices)
 
-    rotated_points_2d = np.dot(projected_points - np.mean(projected_points, axis=0), rotation_matrix_2d.T)
+    # Ensure output folder exists
+    os.makedirs(output_folder, exist_ok=True)
+    rotation_matrix = None
+    fitted_line_final = None
+    shift_final = None
 
-    # Step 13: Visualize the 2D projection
+    for i, shift in enumerate(shift_values):
+        offset = shift * slice_direction
+        p1_shifted, p2_shifted = p1 + offset, p2 + offset
+        #rotated_points_2d = slice_and_project(clustered_pcd, p1_shifted, p2_shifted, normal, 0.01)
+        projected_points_first, corrected_normal_first, sliced_colors_first = slice_point_cloud(clustered_first, p1_shifted, p2_shifted, normal, 0.01)
+        projected_points_second, corrected_normal_second, sliced_colors_second = slice_point_cloud(clustered_second, p1_shifted, p2_shifted,
+                                                                              normal, 0.01)
+        rotated_points_2d_first, rotation_matrix, fitted_line, shift = rotate_points(projected_points_first, corrected_normal_first, rotation_matrix, shift_final)
+        if not fitted_line_final:
+            fitted_line_final = fitted_line
+        if not shift_final:
+            shift_final = shift
+        rotated_points_2d_second, rotation_matrix, _, _ = rotate_points(projected_points_second, corrected_normal_second, rotation_matrix, shift_final)
+        all_projections_first.append(rotated_points_2d_first)
+        all_projections_second.append(rotated_points_2d_second)
+
+        # Save individual slice plot
+        plt.figure(figsize=(8, 6))
+        plt.scatter(rotated_points_2d_second[:, 0], rotated_points_2d_second[:, 1] * 1000, s=1, alpha=0.5, label=f'Slice {i + 1}')
+        plt.xlabel("X")
+        plt.ylabel("Y (mm)")
+        plt.title(f"2D Projection - Slice {i + 1}")
+        plt.legend()
+        plt.savefig(f"{output_folder}/slice_{i + 1}.png")
+        plt.close()
+
+    # Extract external data
+    xlsx_data = extract_xlsx()
+
+    # Compute the average and standard deviation with variable-length handling
+    min_length = min(len(proj) for proj in all_projections_second)
+    trimmed_projections = [proj[:min_length] for proj in all_projections_second]  # Trim to the shortest projection
+    avg_projection = np.mean(trimmed_projections, axis=0)
+    std_dev_projection = np.std(trimmed_projections, axis=0)
+
+    # Plot the final comparison
     plt.figure(figsize=(8, 6))
-    plt.scatter(rotated_points_2d[:, 0], rotated_points_2d[:, 1], s=1)
+
+    # Plot individual projections
+    for i, projection in enumerate(all_projections_second):
+        plt.scatter(projection[:, 0], projection[:, 1] * 1000, s=1, alpha=0.3)
+    for j, projection_first in enumerate(all_projections_first):
+        plt.scatter(projection_first[:, 0], projection_first[:, 1] * 1000, s=1, alpha=0.3)
+    if fitted_line_final:
+        x_fit, y_fit = fitted_line_final
+        #plt.plot(x_fit, y_fit, color='red')
+
+    # Plot average projection
+    #plt.scatter(-avg_projection[:, 0], avg_projection[:, 1] * 1000 + 27, s=3, color='red')
+    x = avg_projection[:, 0]
+    y = avg_projection[:, 1] * 1000
+
+    poly = np.poly1d(np.polyfit(x, y, 15))
+    #plt.scatter(x, y, s=3, color='red', label='Raw Data')
+    plt.plot(x, poly(x), color='red', label='Smoothed Mean')
+
+    # Plot standard deviation as a shaded region
+    #plt.fill_between(
+    #    -avg_projection[:, 0],
+    #    (avg_projection[:, 1] - std_dev_projection[:, 1]) * 1000,
+    #    (avg_projection[:, 1] + std_dev_projection[:, 1]) * 1000,
+    #    color='red', alpha=0.2, label='Standard Deviation'
+    #)
+
+    # Optionally plot ultrasound depth
+    if plot_ultrasound:
+        plt.plot(xlsx_data['Strecke'], xlsx_data['Wassertiefe'], color='b', marker='o', linestyle='-', markersize=1,
+                 label='Ultraschall Wassertiefe')
+
+    # Add labels, title, and legend
     plt.xlabel("X")
-    plt.ylabel("Y")
-    plt.title("2D Projection of Point Cloud")
-    plt.axis("equal")
-    plt.savefig(f"{output_folder}/projection.png")
+    plt.ylabel("Y (mm)")
+    plt.title("Vergleich RealSense und Ultraschall Wassertiefe")
+    plt.legend()
+
+    # Save the final comparison plot
+    plt.savefig(f"{output_folder}/overlay_plot.png")
+    plt.show()
 
 
-bag_file = "../dataPraktikumsrinneLong/angle_full_cycle.bag"
+bag_file_water = "../data_experiments/20250404_100521.bag" #135 for floaters
+bag_file_floor = "../data_experiments/20250404_094437.bag"
 output_folder = "../outputs"
-process_point_cloud(bag_file, output_folder, frame_number=0, frame_count=500, n_slices=10)
+process_point_cloud(bag_file_floor, bag_file_water, output_folder, frame_numbers=[10, 135], frame_count=1, load=False, plot_ultrasound=False)

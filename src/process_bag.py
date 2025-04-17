@@ -10,7 +10,7 @@ def process_bag_file(bag_file, output_ply=None):
 
     # Configure to read from .bag file
     config.enable_device_from_file(bag_file)
-    profile = pipeline.start(config)
+    pipeline.start(config)
 
     for _ in range(5):  # Skip the first few frames for better alignment
         pipeline.wait_for_frames()

@@ -1,3 +1,5 @@
+import re
+
 import pyrealsense2 as rs
 import numpy as np
 import cv2
@@ -34,10 +36,11 @@ def read_bag_file(bag_file, start_frame, frame_count):
         depth_image = np.asanyarray(depth_frame.get_data())
         color_image = np.asanyarray(color_frame.get_data())
 
+        match = re.search(r'(\d{8}_\d{6})', bag_file)
+        number = match.group()
+
         if i == 0:
-            cv2.imwrite('../outputs/first_frame.png', cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR))
-        if i == frame_count-1:
-            cv2.imwrite('../outputs/last_frame.png', cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(f'../outputs/frame_{number}.png', cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR))
 
         # Initialize accumulators if not already done
         if depth_accumulator is None:

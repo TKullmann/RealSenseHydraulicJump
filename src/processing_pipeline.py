@@ -93,7 +93,7 @@ def process_point_cloud(
     for i, projection in enumerate(all_projections_second):
         plt.scatter(projection[:, 0], projection[:, 1] * 1000, s=1, alpha=0.3)
     for j, projection_first in enumerate(all_projections_first):
-        plt.scatter(projection_first[:, 0], projection_first[:, 1] * 1000, s=1, alpha=0.3)
+        plt.scatter(projection_first[:, 0],projection_first[:, 1] * 1000, s=1, alpha=0.3)
     if fitted_line_final:
         x_fit, y_fit = fitted_line_final
         #plt.plot(x_fit, y_fit, color='red')
@@ -123,7 +123,8 @@ def process_point_cloud(
     # Add labels, title, and legend
     plt.xlabel("X")
     plt.ylabel("Y (mm)")
-    plt.title("Vergleich RealSense und Ultraschall Wassertiefe")
+    #plt.title("Vergleich RealSense und Ultraschall Wassertiefe")
+    plt.title("RealSense Water Depth Estimation | 60° Hay")
     plt.legend()
 
     # Save the final comparison plot
@@ -131,7 +132,15 @@ def process_point_cloud(
     plt.show()
 
 
-bag_file_water = "../data_experiments/20250404_100521.bag" #135 for floaters
-bag_file_floor = "../data_experiments/20250404_094437.bag"
+#bag_file_water = "../data_experiments/20250404_100521.bag" #135 for floaters (Streu)
+#bag_file_floor = "../data_experiments/20250404_094437.bag"
+bag_file_water = "../pfub_measurements_isadora/60deg_hay.bag"
+bag_file_floor = "../pfub_measurements_isadora/60deg_empty.bag"
+#bag_file_floor = "../data_experiments/20250404_105006.bag" #Top down
+#bag_file_water = "../data_experiments/20250404_104042.bag"
+#bag_file_water = "../data_experiments/20250404_103350.bag" #Fäden
+#bag_file_floor = "../data_experiments/20250404_094437.bag"
+#bag_file_water = "../dataPraktikumsrinneLong/angle_full_cycle.bag"
+#bag_file_floor = "../dataPraktikumsrinneLong/angle_full_cycle.bag"
 output_folder = "../outputs"
-process_point_cloud(bag_file_floor, bag_file_water, output_folder, frame_numbers=[10, 135], frame_count=1, load=False, plot_ultrasound=False)
+process_point_cloud(bag_file_floor, bag_file_water, output_folder, frame_numbers=[10, 67], frame_count=1, load=False, plot_ultrasound=False)

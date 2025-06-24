@@ -1,3 +1,4 @@
+import os
 import re
 
 import pyrealsense2 as rs
@@ -11,7 +12,13 @@ def read_bag_file(bag_file, start_frame, frame_count):
     config.enable_stream(rs.stream.depth)
     config.enable_stream(rs.stream.color)
 
-    pipeline.start(config)
+    pipeline_profile = pipeline.start(config)
+
+    depth_profile = pipeline_profile.get_stream(rs.stream.depth).as_video_stream_profile()
+    color_profile = pipeline_profile.get_stream(rs.stream.color).as_video_stream_profile()
+    print("Depth FPS:", depth_profile.fps())
+    print("Color FPS:", color_profile.fps())
+
     align = rs.align(rs.stream.color)  # Align depth to color frame
 
     # Skip frames up to the starting frame number
@@ -37,7 +44,11 @@ def read_bag_file(bag_file, start_frame, frame_count):
         color_image = np.asanyarray(color_frame.get_data())
 
         match = re.search(r'(\d{8}_\d{6})', bag_file)
-        number = match.group()
+        if match:
+            number = match.group()
+        else:
+            filename = os.path.splitext(os.path.basename(bag_file))[0]
+            number = filename
 
         if i == 0:
             cv2.imwrite(f'../outputs/frame_{number}.png', cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR))
